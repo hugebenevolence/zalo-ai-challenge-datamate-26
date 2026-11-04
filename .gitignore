@@ -18,6 +18,13 @@ runs/analysis/*
 runs/analysis/predict_pre_*.py
 runs/analysis/agent_v*_backup.py
 
+# The LoRA adapter the team runs, in Git LFS (.gitattributes); checkpoints stay local
+!runs/lora/
+runs/lora/*
+!runs/lora/sql_rft_v2/
+runs/lora/sql_rft_v2/*
+!runs/lora/sql_rft_v2/adapter/
+
 # Competition data and files built from it (regulations 4.3): the bank holds train questions, rebuilt by runs/analysis/build_fewshot_bank.py
 sqlbase/fewshot_bank*.jsonl
 
