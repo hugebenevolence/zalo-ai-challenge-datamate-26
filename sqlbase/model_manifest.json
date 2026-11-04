@@ -1,0 +1,19 @@
+{
+  "repo_id": "Qwen/Qwen3-14B",
+  "revision": "40c069824f4251a91eefaf281ebe4c544efd3e18",
+  "revision_date_utc": "2025-07-26T03:49:23Z",
+  "license": "Apache-2.0",
+  "safetensors_total_parameters": 14768307200,
+  "parameter_source": "https://huggingface.co/api/models/Qwen/Qwen3-14B",
+  "commit_source": "https://huggingface.co/api/models/Qwen/Qwen3-14B/commits/main",
+  "inference_models": 1,
+  "embeddings_or_rerankers": 0,
+  "vllm": "0.32.0",
+  "dtype": "bfloat16 weights, fp8 online quantization",
+  "enable_thinking": "hybrid: thinking for per-shop view drafts (K=8, 6144 tok) and for escalation of low-agreement questions (4 samples, conf<0.75); non-thinking for the 8 main SQL samples",
+  "temperature": "0.7 SQL samples; 0.6 / top_k 20 thinking; greedy repairs",
+  "seed": 0,
+  "language_model_only": true,
+  "gpu_validated": true,
+  "note": "Single inference model, 14.77B params (<= 15B total). fp8 online quant + fp8 KV cache, one vLLM process per GPU (predict.sh shards shops, merges to /result/submission.jsonl + /result/logs/<id>.json). Validated offline in Docker (--network none) on 2x RTX A5000 24GB; RTX 5090 timing not measured."
+}

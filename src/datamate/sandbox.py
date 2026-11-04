@@ -13,10 +13,12 @@ from __future__ import annotations
 import contextlib
 import datetime
 import io
+import keyword
 import math
 import multiprocessing as mp
 import os
 import pickle
+import resource
 import signal
 import time
 import traceback
@@ -32,6 +34,30 @@ def save_tables(path: Path, frames: dict, readme: str = "") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(pickle.dumps({"frames": frames, "readme": readme}))
     return path
+
+
+def table_variables(frames: dict) -> dict:
+    """Bare names the model writes for tables: an identifier key as it is (sqlite `don_hang`), and a
+    file's stem (`don_hang` for "don_hang.csv") when no other file has that stem."""
+    stems: dict[str, list] = {}
+    for k in frames:
+        if "::" not in k and "." in k:
+            stems.setdefault(k.rsplit(".", 1)[0], []).append(k)
+    names = {stem: frames[keys[0]] for stem, keys in stems.items() if len(keys) == 1}
+    names.update((k, v) for k, v in frames.items() if k.isidentifier())
+    return {k: v for k, v in names.items() if k.isidentifier() and not keyword.iskeyword(k)}
+
+
+def _cap_memory(gb: float):
+    """Make a runaway program (e.g. `df[mask] & series`, which aligns into an n x n frame) fail fast with
+    MemoryError instead of pushing the machine into the OOM killer. The cap is on top of what the child
+    already maps (the worker's tables and libraries)."""
+    if gb <= 0:
+        return
+    with contextlib.suppress(OSError, ValueError):
+        vsize = int(Path("/proc/self/statm").read_text().split()[0]) * os.sysconf("SC_PAGE_SIZE")
+        limit = vsize + int(gb * (1 << 30))
+        resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
 
 
 @dataclass
@@ -64,7 +90,8 @@ def _jsonable(v):
     return v
 
 
-def _child(conn, code: str, env: dict, max_stdout: int):
+def _child(conn, code: str, env: dict, max_stdout: int, mem_gb: float):
+    _cap_memory(mem_gb)
     out = io.StringIO()
     g = dict(env)
     t = time.time()
@@ -91,12 +118,14 @@ def _worker(conn, biz_pickle: str, calendar_csv: str, timeout: float, max_stdout
     calendar = pd.read_csv(calendar_csv)
     ctx = mp.get_context("fork")
     parallel = int(os.environ.get("DATAMATE_EXEC_PARALLEL", 4))
+    mem_gb = float(os.environ.get("DATAMATE_EXEC_MEM_GB", 4))
+    named = table_variables(payload["frames"])
 
     def start(code, as_of):
-        env = {**helpers.EXPORTS, "tables": payload["frames"], "calendar": calendar, "AS_OF": pd.Timestamp(as_of),
-               "README": payload.get("readme", "")}
+        env = {**named, **helpers.EXPORTS, "tables": payload["frames"], "calendar": calendar,
+               "AS_OF": pd.Timestamp(as_of), "README": payload.get("readme", "")}
         r_conn, w_conn = ctx.Pipe(duplex=False)
-        p = ctx.Process(target=_child, args=(w_conn, code, env, max_stdout))
+        p = ctx.Process(target=_child, args=(w_conn, code, env, max_stdout, mem_gb))
         p.start()
         w_conn.close()
         return p, r_conn, time.time()

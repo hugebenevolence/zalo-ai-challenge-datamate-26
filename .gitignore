@@ -3,6 +3,24 @@ __pycache__/
 *.pyc
 .venv/
 outputs/
-runs/
 .pytest_cache/
 *.egg-info/
+
+# SQL baseline model weights
+sqlbase/models/
+
+# Run outputs and logs stay within the team; only the scripts under runs/analysis are code
+runs/*
+!runs/analysis/
+runs/analysis/*
+!runs/analysis/*.py
+!runs/analysis/*.sh
+runs/analysis/predict_pre_*.py
+runs/analysis/agent_v*_backup.py
+
+# Competition data and files built from it (regulations 4.3): the bank holds train questions, rebuilt by runs/analysis/build_fewshot_bank.py
+sqlbase/fewshot_bank*.jsonl
+
+# Generated, or of unchecked origin
+unsloth_compiled_cache/
+code.zip

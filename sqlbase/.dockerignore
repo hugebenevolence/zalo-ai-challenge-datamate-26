@@ -1,0 +1,12 @@
+*
+!Dockerfile
+!requirements.txt
+!ingest.py
+!llmviews.py
+!predict.py
+!evaluation.py
+!predict.sh
+!model_manifest.json
+!models/
+!models/Qwen3-14B/
+!models/Qwen3-14B/**

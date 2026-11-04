@@ -131,7 +131,10 @@ based checks (date coverage, field availability) stay in the prompt.
 - Self-repair gains are modest once its cost is counted; spending the budget on diverse first
   samples does better, and feedback quality is the bottleneck. [Olausson et al. 2024](https://arxiv.org/pdf/2306.09896)
 
-**Decision:** repair only questions where every sample failed, once, greedily; a repaired answer
+**Decision (v7, 2026-11-01):** every failed sample gets one greedy repair turn and its fix replaces it in
+the vote. The earlier rule (repair only when all K failed, the fix counting 1/K < τ) never produced an
+answer, while about 10% of public samples crashed on a column or table name the error message names.
+Superseded rule: repair only questions where every sample failed, once, greedily; a repaired answer
 carries the support of a single sample.
 
 ## 10. Self-verification by the same model

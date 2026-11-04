@@ -62,7 +62,52 @@ def test_description_points_to_parsed_columns(nb):
 def test_parse_plan_never_reads_plain_ints_as_dates(nb):
     df = pd.DataFrame({"tien": [45000, 46000, 45500] * 10, "ngay": ["01/04/2025", "02/04/2025", "1 thg 5 2025"] * 10})
     plan = nb["plan_parsing"](df.astype(object), "x")
-    assert "tien" not in plan and plan["ngay"][0] == "date"
+    assert plan["tien"][0] == "number" and plan["ngay"][0] == "date"     # ints get a __num copy, never a date
+
+
+def test_number_parse_skips_phrases_and_phone_numbers(nb):
+    df = pd.DataFrame({"addr": ["93 Nguyễn Thị Minh Khai", "12 Lê Lợi", "5 Tỉnh Lộ 10"] * 10,
+                       "sdt": ["0914430525", "0980004652", "0903123456"] * 10, "sl": ["2 đĩa", "1 đĩa", "3 lon"] * 10})
+    plan = nb["plan_parsing"](df.astype(object), "x")
+    assert "addr" not in plan and "sdt" not in plan and plan["sl"][0] == "number"
+
+
+def test_line_number_is_not_an_order_id(nb):
+    df = pd.DataFrame({"STT": [1, 2, 1], "Mã phiếu nhập": ["PN1", "PN1", "PN2"]})
+    assert nb["order_id_column"](df, {"STT": "số thứ tự dòng trong phiếu nhập"}) != "STT"
+    assert nb["order_id_column"](df, {"STT": "số thứ tự đơn (hoá đơn) trong sổ"}) == "STT"
+
+
+def test_independent_records_are_not_grouped(nb):
+    df = pd.DataFrame({"Mã KH": ["K1", "K2", "K3", "K4", "K5"],
+                       "Sinh nhật": ["01/02/1990", None, "03/04/1985", None, None],
+                       "Email": ["a@x", None, "c@x", None, None]})
+    assert nb["continuation_rows"](df, "khach_hang.csv")[0] is None
+
+
+def test_order_ids_written_as_one_word(nb):
+    for name in ["MaHoaDon", "ma_don", "SoHD", "OrderID"]:
+        assert nb["order_id_column"](pd.DataFrame({name: ["A"], "SL": [1]}), {}) == name
+    assert nb["order_id_column"](pd.DataFrame({"MaHangHoa": ["A"]}), {}) is None
+
+
+def test_duplicate_lines_count_once_within_an_order_only(nb):
+    df = pd.DataFrame({"Ma don": ["D1", "D1", "D1", "D2"], "Hang": ["Bia", "Bia", "Coca", "Bia"], "SL": [2, 2, 1, 2]})
+    out, n = nb["dedupe_order_table"](df, {"Ma don": "mã đơn"})
+    assert n == 1 and list(out["Ma don"]) == ["D1", "D1", "D2"]       # D2's identical line is another sale
+    ledger = pd.DataFrame({"Ngay": ["1/4", "1/4"], "Tien": [5, 5]})
+    assert nb["dedupe_order_table"](ledger, {})[1] == 0               # not kept by order: both lines count
+
+
+def test_header_repeated_inside_a_table_is_dropped(nb):
+    df = pd.DataFrame({"Mã đơn": ["D1", "Mã đơn", "D2"], "Tên hàng": ["Bia", "Tên hàng", "Coca"], "SL": [1, "SL", 2]})
+    assert list(nb["drop_header_repeats"](df)["Mã đơn"]) == ["D1", "D2"]
+
+
+def test_duplicate_order_lines_removed_on_load(nb):
+    biz = nb["load_business_cached"]("train", "biz_123")             # sqlite POS, ids like MaHoaDon
+    d = biz.frames["chi_tiet_don"]
+    assert not d.duplicated().any() and len(d) == 64149 - 1208
 
 
 # ---------------------------------------------------------------- answers and voting
@@ -111,6 +156,19 @@ def test_normalize_answer_rejects(nb, raw):
 def test_percent_guard(nb):
     assert nb["postprocess"]("tỉ lệ đơn huỷ là bao nhiêu %", N(12.5)) == {"type": "percent", "answer": 12.5}
     assert nb["postprocess"]("doanh thu tháng 5", N(12)) == N(12)
+    day = {"type": "string", "answer": "2025-11-15"}
+    assert nb["postprocess"]("ngày nào doanh thu cao nhất", day) == {"type": "date", "answer": "2025-11-15"}
+    assert nb["postprocess"]("ai mua nhiều nhất", {"type": "string", "answer": "Anh Ba"})["type"] == "string"
+
+
+def test_walk_in_customer_is_never_a_ranked_customer(nb):
+    S = lambda v: {"type": "string", "answer": v}
+    assert nb["postprocess"]("khách nào mua nhiều đơn nhất?", S("Khách lẻ")) is None
+    assert nb["postprocess"]("ai mua nhiều tiền nhất", S("kl")) is None
+    assert nb["postprocess"]("3 khách chi nhiều nhất", {"type": "list", "answer": ["Chị Lan", "khách lẻ"]}) is None
+    assert nb["postprocess"]("khách nào mua nhiều đơn nhất?", S("Chị Lan")) == S("Chị Lan")
+    assert nb["postprocess"]("nhóm khách nào mua nhiều nhất", S("lẻ")) == S("lẻ")   # 'lẻ' can be a group name
+    assert nb["postprocess"]("món nào bán chạy nhất", S("Bánh lẻ")) == S("Bánh lẻ")
 
 
 def test_prompt_v2_is_unchanged_and_v3_differs(nb):
@@ -147,16 +205,24 @@ def test_vote_threshold_and_percent_guard(nb):
 
 
 def test_abstains_below_threshold(nb):
-    run = _answer(nb, _agent(nb, nb["ScriptedChat"]([[GOOD, OTHER, BROKEN]]), k=3, tau=0.6), QS[:1])
+    run = _answer(nb, _agent(nb, nb["ScriptedChat"]([[GOOD, OTHER, BROKEN]], [BROKEN]), k=3, tau=0.6), QS[:1])
     assert run.rows == [{"id": "q1", "type": "abstain"}]
 
 
-def test_repair_only_when_every_sample_failed(nb):
+def test_every_failed_sample_is_repaired_once(nb):
     llm = nb["ScriptedChat"]([[BROKEN, BROKEN]], [GOOD])
     run = _answer(nb, _agent(nb, llm, k=2, tau=0.5), QS[:1])
-    assert len(llm.calls) == 2 and llm.calls[1]["temperature"] == 0.0
+    assert len(llm.calls) == 2 and llm.calls[1]["temperature"] == 0.0 and len(llm.calls[1]["conversations"]) == 2
     assert "ZeroDivisionError" in llm.calls[1]["conversations"][0][-1]["content"]
-    assert run.rows == [{"id": "q1", "type": "number", "answer": 42}] and run.logs[0]["samples"][-1]["repair"]
+    assert run.rows == [{"id": "q1", "type": "number", "answer": 42}]
+    assert [s.get("repair_of") for s in run.logs[0]["samples"]] == [None, None, 0, 1]
+
+
+def test_a_repaired_sample_votes_in_place_of_the_failed_one(nb):
+    llm = nb["ScriptedChat"]([[GOOD, BROKEN, OTHER]], [GOOD])
+    run = _answer(nb, _agent(nb, llm, k=3, tau=0.6), QS[:1])
+    assert len(llm.calls[1]["conversations"]) == 1                      # only the broken sample is retried
+    assert run.rows == [{"id": "q1", "type": "number", "answer": 42}] and run.logs[0]["support"] == pytest.approx(2 / 3)
 
 
 def test_prompt_wiring(nb):
@@ -177,6 +243,54 @@ def test_run_split_writes_resumes_and_shards(nb, tmp_path):
     assert sorted(json.loads(x)["id"] for x in lines) == ids and len(list((tmp_path / "logs").glob("*.json"))) == 4
     nb["run_split"]("train", tmp_path, cfg, set(ids), nb["ScriptedChat"]([BROKEN]), shard="0/2")  # resumes: no new work
     assert all(json.loads(x)["answer"] == 42 for x in (tmp_path / "submission.jsonl").read_text().splitlines())
+
+
+def test_assign_shops_balances_questions_and_is_stable(nb):
+    counts = {"a": 120, "b": 100, "c": 60, "d": 40, "e": 20}
+    parts = nb["assign_shops"](counts, 2)
+    assert sorted(sum(parts, [])) == sorted(counts) and parts == nb["assign_shops"](counts, 2)
+    assert abs(sum(counts[b] for b in parts[0]) - sum(counts[b] for b in parts[1])) <= 20
+    assert nb["assign_shops"](counts, 1) == [sorted(counts)]
+
+
+def test_resume_drops_torn_lines_repeats_and_rows_without_a_log(nb, tmp_path):
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    for q in ("q1", "q2"):
+        (logs / f"{q}.json").write_text("{}")
+    sub = tmp_path / "submission.jsonl"
+    sub.write_text('{"id": "q1", "type": "abstain"}\n{"id": "q1", "type": "abstain"}\n'
+                   '{"id": "q3", "type": "abstain"}\n{"id": "q2", "ty')
+    assert nb["load_done"](sub, logs) == {"q1"}
+    assert sub.read_text() == '{"id": "q1", "type": "abstain"}\n'
+
+
+def test_run_split_logs_runs_and_progress(nb, tmp_path):
+    ids = sorted(json.loads(line)["id"] for line in (TRAIN / "questions.jsonl").open() if '"biz_110"' in line)[:2]
+    nb["run_split"]("train", tmp_path, nb["AgentConfig"](k=1), set(ids), nb["ScriptedChat"]([GOOD]))
+    events = [json.loads(x)["event"] for x in (tmp_path / "runs.jsonl").read_text().splitlines()]
+    progress = [json.loads(x) for x in (tmp_path / "progress.jsonl").read_text().splitlines()]
+    assert events == ["start", "end"] and progress[0]["shop"] == "biz_110" and progress[0]["questions"] == 2
+    start = json.loads((tmp_path / "runs.jsonl").read_text().splitlines()[0])
+    assert start["git_commit"] and start["config"]["k"] == 1 and "versions" in start
+
+
+class _MetaChat:
+    """A scripted model that also reports token counts and finish reasons, like VLLMChatModel."""
+
+    def __init__(self, nb, reply):
+        self.inner = nb["ScriptedChat"]([reply])
+
+    def chat(self, conversations, n=1, temperature=0.0, thinking=0):
+        out = self.inner.chat(conversations, n, temperature, thinking)
+        self.last_meta = [[(123, "stop") for _ in per] for per in out]
+        return out
+
+
+def test_sample_logs_carry_tokens_and_finish_reason(nb):
+    run = _answer(nb, _agent(nb, _MetaChat(nb, GOOD), k=2, tau=0.5), QS[:1])
+    assert [(s["gen_tokens"], s["finish"]) for s in run.logs[0]["samples"]] == [(123, "stop")] * 2
+    assert run.gen_tokens == 246 and run.truncated == 0 and len(run.logs[0]["system_sha"]) == 16
 
 
 @pytest.mark.parametrize("name", ["01_data.ipynb", "02_agent.ipynb", "03_evaluate.ipynb"])
