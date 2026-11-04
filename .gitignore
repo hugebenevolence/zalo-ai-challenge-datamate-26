@@ -25,8 +25,9 @@ runs/lora/*
 runs/lora/sql_rft_v2/*
 !runs/lora/sql_rft_v2/adapter/
 
-# Competition data and files built from it (regulations 4.3): the bank holds train questions, rebuilt by runs/analysis/build_fewshot_bank.py
+# Few-shot banks hold train questions (regulations 4.3); only the one behind the 0.491 setup is shared, inside the team
 sqlbase/fewshot_bank*.jsonl
+!sqlbase/fewshot_bank24.jsonl
 
 # Generated, or of unchecked origin
 unsloth_compiled_cache/

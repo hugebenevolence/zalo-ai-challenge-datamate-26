@@ -1,0 +1,8 @@
+{
+ "agree": 4,
+ "k": 8,
+ "used": true,
+ "sql": "SELECT\n  CAST(strftime(\"Thời gian\", '%Y%m%d') AS VARCHAR) || '-' || \"Ma don\" AS order_id,\n  CAST(\"Thời gian\" AS DATE) AS order_date,\n  CAST(\"Giờ\" AS TIMESTAMP) AS order_ts,\n  NULL AS product_code,\n  NULL AS product_group,\n  \"Hàng bán\" AS product_name,\n  \"SL bán\" AS qty,\n  \"dvt\" AS unit,\n  \"Amount\" AS amount,\n  NULL AS customer_id,\n  CASE\n    WHEN \"Khách hàng (tên)\" IS NULL\n      OR lower(trim(\"Khách hàng (tên)\")) IN ('khách lẻ', 'kl', 'lẻ', 'vãng lai', '')\n    THEN NULL\n    ELSE \"Khách hàng (tên)\"\n  END AS customer_name,\n  NULL AS staff,\n  NULL AS channel,\n  NULL AS payment,\n  \"_huy\" OR \"_don_huy\" OR \"Trạng thái xử lý\" IN ('Huỷ đơn', 'Không giao được') AS is_cancelled,\n  \"_tra\" OR \"_don_tra\" OR \"SL bán\" < 0 OR \"Trạng thái xử lý\" IN ('hàng trả về', 'Đổi trả', 'trả lại', 'Đã trả hàng') AS is_returned,\n  'item' AS line_kind\nFROM \"sobanhang_all\"",
+ "errors": [],
+ "drafts": []
+}

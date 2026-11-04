@@ -41,19 +41,17 @@ Outputs: `submission.jsonl` (`id`, `type`, `answer`; written as all-abstain firs
 
 Model: Qwen/Qwen3.5-9B revision `c202236235762e1c871ad0ccb60c8ee5ba337b9a` (9.65B params, Apache-2.0), see `model_manifest.json`. Seed 0.
 
-### Run with the team's LoRA
+### Run the 0.491 setup
 
-From the repo root, after installing `sqlbase/requirements.txt`:
+From the repo root, after installing `sqlbase/requirements.txt` and putting the public test data in `data/public_test`:
 
 ```bash
 git lfs install && git lfs pull   # runs/lora/sql_rft_v2/adapter is stored in Git LFS
 hf download Qwen/Qwen3.5-9B --revision c202236235762e1c871ad0ccb60c8ee5ba337b9a --local-dir sqlbase/models/Qwen3.5-9B
-python3 sqlbase/predict.py --data data/public_test --output runs/my_run --model sqlbase/models/Qwen3.5-9B --quant fp8 --k 8 --think-k 4 \
-  --gpu-mem 0.92 --engine '{"kv_cache_dtype":"fp8","max_num_seqs":128,"max_num_batched_tokens":8192,"attention_backend":"TRITON_ATTN"}' \
-  --lora runs/lora/sql_rft_v2/adapter --lora-thinking --debt-views
+bash runs/analysis/run_v2_public.sh runs/my_run   # about 2.1 h on one 24 GB GPU; the file to submit is runs/my_run_debtroute/submission.jsonl
 ```
 
-This is not the full 0.491 setup. That run also used the few-shot bank (`--fewshot PATH`), which is not in the repo because it holds train questions, and debt routing, applied afterwards with `python3 runs/analysis/debt_vote.py RUN --write OUT`.
+The script uses LoRA v2, `sqlbase/fewshot_bank24.jsonl` and the views and debt layers saved from that run (`sqlbase/config_v2_public`), then applies debt routing. Sampling differs between runs and machines, so the score will not match 0.491 exactly. The bank and the saved layers are built from competition data: keep them inside the team.
 
 ## Docker
 

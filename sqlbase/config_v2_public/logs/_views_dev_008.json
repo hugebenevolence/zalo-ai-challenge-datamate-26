@@ -1,0 +1,8 @@
+{
+ "agree": 7,
+ "k": 8,
+ "used": true,
+ "sql": "SELECT \n  \"Bill\" AS \"order_id\",\n  DATE(\"Ngày xuất\") AS \"order_date\",\n  \"Ngày xuất\" AS \"order_ts\",\n  \"Ma hang\" AS \"product_code\",\n  COALESCE(\"Nhóm hàng\", \"Loại hàng\") AS \"product_group\",\n  COALESCE(\"Tên hàng\", \"Hàng\") AS \"product_name\",\n  \"SLg\" AS \"qty\",\n  \"Đơn vị (tính)\" AS \"unit\",\n  \"Thành tiền\" AS \"amount\",\n  \"Mã người mua\" AS \"customer_id\",\n  CASE \n    WHEN \"Khách\" IS NULL OR \"Khách\" = '' OR \n         LOWER(TRIM(\"Khách\")) IN ('khách lẻ', 'kl', 'lẻ', 'vãng lai') \n    THEN NULL \n    ELSE \"Khách\" \n  END AS \"customer_name\",\n  \"Nhân viên bán\" AS \"staff\",\n  \"Kênh bán\" AS \"channel\",\n  \"Thanh toán bằng\" AS \"payment\",\n  CASE \n    WHEN \"TT đơn\" IN ('hủy đơn', 'khách hủy') THEN TRUE \n    ELSE FALSE \n  END AS \"is_cancelled\",\n  CASE \n    WHEN \"TT đơn\" IN ('Hoàn trả', 'trả hàng', 'Đã hoàn hàng') THEN TRUE \n    ELSE FALSE \n  END AS \"is_returned\",\n  CASE \n    WHEN \"Nhóm hàng\" = 'phí dịch vụ' OR \"Tên hàng\" = 'Phí phục vụ' THEN 'service'\n    ELSE 'item'\n  END AS \"line_kind\"\nFROM \"chitiethoadon_1_all\"\nLEFT JOIN \"danhmuchang\" ON \"chitiethoadon_1_all\".\"Ma hang\" = \"danhmuchang\".\"Mã sản phẩm bán\"",
+ "errors": [],
+ "drafts": []
+}

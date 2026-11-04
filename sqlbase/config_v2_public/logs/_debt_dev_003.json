@@ -1,0 +1,19 @@
+{
+ "agree": 2,
+ "k": 8,
+ "used": true,
+ "sqls": [
+  "SELECT \n    \"Đơn số\" AS order_id,\n    DATE(\"Ngày HĐ\") AS order_date,\n    \"Mã khách\" AS customer_id,\n    CASE \n        WHEN \"Khách hàng (tên)\" IN ('Khách lẻ', 'kl', 'lẻ', 'vãng lai', '') THEN NULL\n        ELSE \"Khách hàng (tên)\"\n    END AS customer_name,\n    SUM(\"Tổng thanh toán\") AS total_due,\n    MAX(\"_don_huy\") AS is_cancelled,\n    CASE \n        WHEN MAX(\"Hình thức thanh toán\") = 'Thu hộ (COD)' THEN TRUE\n        ELSE FALSE\n    END AS no_debt,\n    CASE \n        WHEN MAX(\"Hình thức thanh toán\") = 'Ghi nợ' THEN TRUE\n        ELSE FALSE\n    END AS is_credit\nFROM \"banhang_tonghop_banhang_all\"\nGROUP BY \"Đơn số\", DATE(\"Ngày HĐ\"), \"Mã khách\", \"Khách hàng (tên)\"",
+  "SELECT \n    \"Ma don\" AS order_id,\n    DATE(\"Ngày TT\") AS pay_date,\n    \"Tiền thu\" AS amount\nFROM \"banhang_phieuthu\""
+ ],
+ "checked": [
+  "None",
+  "None",
+  "None",
+  "None",
+  "None",
+  "None",
+  "(62839, 8796008600, 62580, 4472510474, 26288, 3920022226)",
+  "(62839, 8796008600, 62580, 4472510474, 26288, 3920022226)"
+ ]
+}
