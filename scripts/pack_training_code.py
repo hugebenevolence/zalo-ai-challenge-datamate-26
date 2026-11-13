@@ -31,11 +31,17 @@ ADAPTERS = {
                    "runtime_s": 24830, "train_loss": 0.1762},
     "sql_rft_v3": {"data": "data/sft/sql_rft_v3_notes.jsonl", "init": "sql_rft_v2", "max_len": 32768, "lr": 5e-5, "examples": 2909, "dropped": 1,
                    "steps": 364, "runtime_s": 29440, "train_loss": 0.1809},
+    "sql_v5": {"data": "data/sft/sql_v5_mix.jsonl", "init": "sql_rft_v3", "max_len": 32768, "lr": 5e-5, "examples": 4300, "dropped": 0, "steps": 538,
+               "runtime_s": 36963, "train_loss": 0.0785, "completion_logits": True,
+               "note": "second inference adapter; trained from v3 on 3,300 synthetic rows (generator v2, synth/), 500 OpenAI-teacher rows on synthetic "
+                       "shops and 500 train rows; the run was resumed from checkpoint-50 after an out-of-memory stop (runtime and loss of the resumed part)"},
 }
 COMMON = {"r": 16, "alpha": 32, "dropout": 0, "epochs": 1, "batch": 1, "grad_accum": 8, "warmup_steps": 10, "scheduler": "cosine",
           "optimizer": "adamw_8bit", "weight_decay": 0.0, "seed": 3407, "precision": "bf16", "base_quantization": "4-bit (Unsloth QLoRA)",
           "no_thinking_default": True, "end": "<|im_end|>"}
-FINAL_CKPT = {"sql_rft_v1": "checkpoint-205", "sql_rft_v2": "checkpoint-300", "sql_rft_v3": "checkpoint-364"}
+FINAL_CKPT = {"sql_rft_v1": "checkpoint-205", "sql_rft_v2": "checkpoint-300", "sql_rft_v3": "checkpoint-364", "sql_v5": "checkpoint-538"}
+RUN_DIR = {"sql_v5": "sql_v5_mix"}                                   # runs/lora/<dir> when it differs from the adapter name
+LOG = {"sql_v5": "runs/train_v5.log"}                                # training log when it is not runs/lora/<name>.log
 
 BASE = {"repo": "Qwen/Qwen3.5-9B", "url": "https://huggingface.co/Qwen/Qwen3.5-9B", "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
         "created": "2026-02-27", "license": "Apache-2.0", "parameters": 9653104368, "local": "models/Qwen3.5-9B",
@@ -95,6 +101,12 @@ def main():
     for f in ("build_sft.py", "add_notes.py", "build_fewshot_bank.py", "build_pool.py"):
         copy(R / "training" / f, out / "data_generation" / f)
     copy(R / "datamate", out / "data_generation/datamate")
+    # generator v2 (synthetic shops, rule sets, verified questions) and the v5 mix builder
+    copy(R / "synth", out / "data_generation/synth")
+    for f in ("mix_v5.py",):
+        copy(R / "training" / f, out / "data_generation" / f)
+    for f in ("build_synth3.sh", "build_synth4.sh"):
+        copy(R / "runs" / f, out / "data_generation" / f)
     # configs
     copy(R / "scripts/flags.sh", out / "configs/flags.sh")
     for f in ("rft_train24.txt", "holdout600.txt"):
@@ -105,13 +117,14 @@ def main():
         (out / f"configs/{name}.json").write_text(json.dumps({**COMMON, **cfg, "base_model": BASE["repo"], "base_revision": BASE["revision"]}, indent=2) + "\n")
     # data
     copy(R / "data/train", out / "data/competition_train")
-    for f in ("sql_rft_v1.jsonl", "sql_rft_v2.jsonl", "sql_rft_v3.jsonl", "sql_rft_v3_notes.jsonl"):
+    for f in ("sql_rft_v1.jsonl", "sql_rft_v2.jsonl", "sql_rft_v3.jsonl", "sql_rft_v3_notes.jsonl", "sql_v5_mix.jsonl"):
         copy(R / "data/sft" / f, out / "data/sft" / f)
     copy(R / "assets/fewshot_bank.jsonl", out / "data/fewshot_bank.jsonl")
+    copy(R / "assets/fewshot_bank_v2.jsonl", out / "data/fewshot_bank_v2.jsonl")
     # logs and checkpoints
     for name, ck in FINAL_CKPT.items():
-        copy(R / f"runs/lora/{name}.log", out / f"logs/{name}.log")
-        copy(R / f"runs/lora/{name}/{ck}/trainer_state.json", out / f"logs/{name}_trainer_state.json")
+        copy(R / LOG.get(name, f"runs/lora/{name}.log"), out / f"logs/{name}.log")
+        copy(R / f"runs/lora/{RUN_DIR.get(name, name)}/{ck}/trainer_state.json", out / f"logs/{name}_trainer_state.json")
     for name in ("sql_rft_v1", "sql_rft_v2"):
         copy(R / f"runs/lora/{name}/adapter", out / f"checkpoints/{name}")
 
@@ -120,7 +133,8 @@ def main():
     for p in sorted(out.rglob("*")):
         if p.is_file():
             files.append({"path": str(p.relative_to(out)), "bytes": p.stat().st_size, "sha256": sha256(p)})
-    datasets = {f"data/sft/{n}": sft_counts(out / "data/sft" / n) for n in ("sql_rft_v1.jsonl", "sql_rft_v2.jsonl", "sql_rft_v3.jsonl", "sql_rft_v3_notes.jsonl")}
+    datasets = {f"data/sft/{n}": sft_counts(out / "data/sft" / n) for n in ("sql_rft_v1.jsonl", "sql_rft_v2.jsonl", "sql_rft_v3.jsonl", "sql_rft_v3_notes.jsonl",
+                                                                       "sql_v5_mix.jsonl")}
     train_q = sum(1 for line in (out / "data/competition_train/questions.jsonl").open(encoding="utf-8-sig") if line.strip())
     datasets["data/competition_train"] = {"questions": train_q, "businesses": len([d for d in (out / "data/competition_train/data").iterdir() if d.is_dir()]),
                                           "source": "Zalo AI Challenge 2026 DataMate train split, as provided (questions, answers, data, rulebook, calendar)"}
@@ -129,9 +143,17 @@ def main():
         local = R / m.pop("local")
         if local.exists() and not a.skip_model_hashes:
             m["files"] = [{"name": str(p.relative_to(local)), "bytes": p.stat().st_size, "sha256": sha256(p)} for p in sorted(local.rglob("*")) if p.is_file()]
-    manifest = {"description": "Training code, data and evidence of the DataMate LoRA adapters (v1 -> v2 -> v3; v3 is the inference adapter at /code/models/lora)",
+    manifest = {"description": "Training code, data and evidence of the DataMate LoRA adapters (v1 -> v2 -> v3 -> v5; v3 and v5 are the inference adapters "
+                                "at /code/models/lora and /code/models/lora_v5)",
                 "adapters": {n: {**COMMON, **c, "final_checkpoint": FINAL_CKPT[n]} for n, c in ADAPTERS.items()},
-                "inference_adapter": {"path": "/code/models/lora", "sha256": sha256(R / "adapters/sql_rft_v3/adapter_model.safetensors"), "parameters": 43278336},
+                "inference_adapters": [{"path": "/code/models/lora", "adapter": "sql_rft_v3", "sha256": sha256(R / "adapters/sql_rft_v3/adapter_model.safetensors"),
+                                        "parameters": 43278336},
+                                       {"path": "/code/models/lora_v5", "adapter": "sql_v5", "sha256": sha256(R / "adapters/sql_v5/adapter_model.safetensors"),
+                                        "parameters": 43278336}],
+                "synthetic_data": {"generator": "data_generation/synth (generator v2: rendered messy shop files, answers computed by code, every question's SQL "
+                                                "verified against the computed answer)", "builds": "data_generation/build_synth3.sh, build_synth4.sh",
+                                   "teacher": "500 rows written by an OpenAI model on synthetic shops only (data_generation/synth/teacher.py); "
+                                              "no public or private test data was ever sent"},
                 "models": models, "datasets": datasets, "files": files}
     (out / "data_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     total = sum(f["bytes"] for f in files)

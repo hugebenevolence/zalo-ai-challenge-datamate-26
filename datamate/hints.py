@@ -151,6 +151,76 @@ def outside(periods, span):
 DEBT_WORDS = re.compile(r"(?:^|_)(?:no|nowj|cong_no|mua_chiu|ghi_no)(?:_|$)")  # nợ (also its telex typo), công nợ, mua chịu, ghi nợ, on norm(question)
 
 
-def question_hints(question, as_of, db, meta):
+# Shop-owner wording the samples misread (public audit): 'đh', 'o đờ' asked a number of orders and got revenue; 'bữa nay' was taken for yesterday;
+# 'cất hàng' (buying stock) was read as stock on hand; an unaccented final 'vay' (vậy) was read as a loan.
+WORDING = [
+    (re.compile(r"(?:^|_)dh(?:_|$)"), "'đh' = đơn hàng (orders): 'bao nhiêu đh' / 'mấy đh' asks a NUMBER OF ORDERS, not money"),
+    (re.compile(r"(?:^|_)(?:o|ot)_do(?:_|$)"), "'o đờ' / 'ọt đơ' = order = đơn hàng: 'bao nhiêu o đờ' asks a NUMBER OF ORDERS, not money"),
+    (re.compile(r"(?:^|_)(?:bua_nay|bua_ni|hom_ni)(?:_|$)"), "'bữa nay' / 'bữa ni' / 'hôm ni' = TODAY ({d}), not yesterday"),
+    (re.compile(r"(?:^|_)cat_hang(?:_|$)"), "'cất hàng' = nhập hàng: buying stock from suppliers (purchase receipts), not the stock on hand"),
+]
+FINAL_VAY = re.compile(r"(?i)(?:^|\s)vay\s*[?.!]*\s*$")
+# A quality the files cannot measure. Train labels these unanswerable (tận tâm, lễ phép, quý mến, khó tính, tay nghề); public samples answered
+# 'thợ nhiệt tình nhất', 'nhà cung cấp uy tín / đáng tin cậy' with a ranking the rulebook defines under another name.
+QUALITY = re.compile(r"(?i)thân thiện|uy tín|đáng tin|nhiệt tình|chu đáo|tận tâm|tận tình|lễ phép|vui vẻ|vui tính|dễ thương|dễ mến|khó tính|dễ tính|tay nghề|hài lòng|đẹp trai")
+QUALITY_PLAIN = re.compile(r"(?:^|_)(?:than_thien|uy_tin|nhiet_tinh|chu_dao|tan_tam|le_phep|de_thuong|tay_nghe)(?:_|$)")
+
+
+def wording_hints(question, as_of, rules=()):
+    t, out = norm(question), []
+    for pat, text in WORDING:
+        if pat.search(t):
+            out.append("WORDING: " + text.format(d=as_of))
+    if FINAL_VAY.search(question) and not DEBT_WORDS.search(t):
+        out.append("WORDING: the final 'vay' is the particle 'vậy' (no meaning), not 'vay' (a loan)")
+    m = QUALITY.search(question.lower()) or QUALITY_PLAIN.search(t)
+    if m:
+        word = m.group(0).strip("_").replace("_", " ")
+        if not any(norm(word) in norm(name) for name, _ in rules):
+            out.append(f"UNDEFINED QUALITY: '{word}' is a personal quality the rulebook does not define and the files do not record; do not answer it with a "
+                       "ranking the rulebook defines under another name (§7): TYPE: unanswerable")
+    return out
+
+
+def question_hints(question, as_of, db, meta, rules=()):
     """Every hint line placed after the date anchors of one question."""
-    return period_hints(question, as_of, db) + grain_hints(question) + lot_hint(question, meta)
+    return period_hints(question, as_of, db) + grain_hints(question) + lot_hint(question, meta) + wording_hints(question, as_of, rules)
+
+
+RULE_STOP = set("trong ky cua mot cac va theo x la co nhat".split())
+RULE_GENERIC = set("nhan vien khach hang mat don tho thang tuan nam ngay quy so".split())
+
+
+def rule_rows(rulebook):
+    """(name cell, text cell) of every table row of the rulebook, header and separator rows left out."""
+    out = []
+    for line in rulebook.splitlines():
+        m = re.match(r"\|\s*([^|]+?)\s*\|\s*(.+?)\s*\|\s*$", line)
+        if m and not set(m.group(1)) <= set("-: ") and m.group(1) not in ("Luật", "Cách nói", "Cách ghi", "Từ", "type"):
+            out.append((m.group(1), m.group(2)))
+    return out
+
+
+def rule_lines(question, rows, k=3):
+    """Rulebook rows whose NAME the question spells out in full (accents and case ignored): a term the rulebook defines
+    (a named ranking, a threshold, a rate) is to be computed by its definition, so the row is put next to the question.
+    A row needs two or more content words in its name, all present in the question; the longest names win."""
+    words = set(norm(question).split("_"))
+    hits = []
+    for name, text in rows:
+        if re.search(r"thứ X\b", name):  # a row about "ngày thứ X": the question names the weekday itself
+            term = [w for w in norm(name).split("_") if w and w not in RULE_STOP and w not in ("ngay", "thu")]
+            if re.search(r"thu_(hai|ba|tu|nam|sau|bay|[2-7])(_|$)|chu_nhat|(^|_)cn(_|$)", norm(question)) and all(w in words for w in term):
+                hits.append((set(term), name, text))
+            continue
+        best = set()
+        for part in name.split(","):  # "Lượt xe, phiếu" names two terms: either one, spelled out, is a match
+            term = {w for w in norm(part).split("_") if w and w not in RULE_STOP and not w.isdigit()}
+            # a term made only of everyday nouns (nhân viên, mặt hàng) names no rule by itself
+            if len(term) >= 2 and not term <= RULE_GENERIC and term <= words and len(term) > len(best):
+                best = term
+        if best:
+            hits.append((best, name, text))
+    hits = [h for h in hits if not any(h[0] < o[0] for o in hits)]  # a shorter term inside a longer matched one is dropped
+    hits.sort(key=lambda h: -len(h[0]))
+    return [f"{name}: {text.replace('**', '')}" for _, name, text in hits[:k]]

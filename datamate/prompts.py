@@ -74,6 +74,7 @@ def chat(system, biz_ctx, q, shots=""):
             + "".join("\n" + p for p in q.get("_periods", []))
             + ("\n\nVALUES MATCHING THE QUESTION:\n" + "\n".join(hits) if hits else "")
             + ("\n\n" + shots if shots else "")
+            + ("\n\nRULEBOOK ROWS NAMED IN THE QUESTION (compute these terms exactly as defined here):\n" + "\n".join("- " + r for r in q["_rules"]) if q.get("_rules") else "")
             + f"\n\nQUESTION: {q['question']}" + (f"\n(abbreviations: {'; '.join(gloss)})" if gloss else ""))
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 

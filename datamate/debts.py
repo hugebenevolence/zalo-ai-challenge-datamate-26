@@ -25,6 +25,9 @@ Second SELECT, one row per payment a customer made for one order, with exactly t
   amount        the money paid in that payment, positive
 
 Rules: use only tables/columns listed in SCHEMA, always double-quoted. Keep cancelled and excluded orders: flag them, do not filter them out. Line tables must be reduced to one row per order. Do not take a stored "still owing" column as total_due when payments are recorded: debts at earlier days are computed from the payments.
+One row per order is best; when the order's values sit on every line of a line table, you may also return one row per line carrying them (the pipeline keeps one row per order: an order total repeated on every line counts once, line amounts are added up), which avoids a GROUP BY.
+Several books: when the shop keeps what customers owe in more than one book (a debt book, an instalment / trả góp book ...), every book the RULEBOOK counts as debt goes into BOTH SELECTs with UNION ALL, each order once. An instalment order owes its price minus the down payment made at purchase (total_due = price - down payment), and every instalment paid later is one payment row with its own date and amount.
+A book that writes the order's values (date, customer, price ...) only on the first row of the order and then one row per later payment: take the order's values from that first row (one row per order: GROUP BY the order, max() of each value) and every row that holds a paid amount as one payment.
 Think briefly, then answer with the two ```sql``` blocks."""
 
 CUSTOMER = "coalesce(customer_id, nullif(regexp_replace(replace(strip_accents(lower(customer_name)), 'đ', 'd'), '[^a-z0-9]', '', 'g'), ''))"
@@ -52,6 +55,16 @@ def build(db, sqls, prefix="v_debt_"):
         coalesce(CAST(is_cancelled AS BOOLEAN), false) AS is_cancelled, coalesce(CAST(no_debt AS BOOLEAN), false) AS no_debt, coalesce(CAST(is_credit AS BOOLEAN), false) AS is_credit FROM src""")
     db.execute(f"""CREATE OR REPLACE TABLE {prefix}pay_raw AS WITH src AS ({p}) SELECT CAST(order_id AS VARCHAR) AS order_id, CAST(pay_date AS DATE) AS pay_date, CAST(amount AS DOUBLE) AS amount
         FROM src WHERE amount IS NOT NULL AND amount <> 0""")
+    n, ids = db.execute(f"SELECT count(*), count(DISTINCT order_id) FROM {prefix}orders_raw").fetchone()
+    if n and n - ids > 0.01 * n:
+        # one row per line: keep one row per order. An order total repeated on every line is taken once, line amounts are added up. Public fresh
+        # drafts of dev_007 / dev_008 / dev_014 failed here or on the GROUP BY they wrote for it (16 of 16 each)
+        rep, same = db.execute(f"""SELECT count(*), count(*) FILTER (WHERE nd = 1) FROM (SELECT count(DISTINCT total_due) AS nd FROM {prefix}orders_raw
+            GROUP BY order_id HAVING count(*) >= 2)""").fetchone()
+        due = "max(total_due)" if rep and same >= 0.95 * rep else "sum(total_due)"
+        db.execute(f"""CREATE OR REPLACE TABLE {prefix}orders_raw AS SELECT order_id, min(order_date) AS order_date, any_value(customer_id) AS customer_id,
+            any_value(customer_name) AS customer_name, {due} AS total_due, bool_or(is_cancelled) AS is_cancelled, bool_or(no_debt) AS no_debt,
+            bool_or(is_credit) AS is_credit FROM {prefix}orders_raw GROUP BY order_id""")
     n, ids, dated, bad_total = db.execute(f"SELECT count(*), count(DISTINCT order_id), avg(CAST(order_date IS NOT NULL AS INT)), count(*) FILTER (WHERE total_due IS NULL OR total_due < 0) FROM {prefix}orders_raw").fetchone()
     if not n or dated < 0.95:
         raise ValueError(f"unusable orders SELECT: rows={n}, share of rows with order_date={dated or 0:.2f}")

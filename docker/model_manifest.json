@@ -8,9 +8,9 @@
   "commit_source": "https://huggingface.co/api/models/Qwen/Qwen3.5-9B/commits/main",
   "inference_models": 1,
   "embeddings_or_rerankers": 0,
-  "lora_adapter": "adapters/sql_rft_v3 (in the image: /code/models/lora)",
-  "lora_adapter_parameters": 43278336,
-  "total_parameters_with_adapter": 9696382704,
+  "lora_adapter": "two adapters on the one base model: adapters/sql_rft_v3 (in the image: /code/models/lora, pass 1) and adapters/sql_v5 (/code/models/lora_v5, pass 2)",
+  "lora_adapter_parameters": 86556672,
+  "total_parameters_with_adapter": 9739661040,
   "vllm": "0.32.0",
   "dtype": "bfloat16 weights, fp8 online quantization",
   "enable_thinking": "hybrid: thinking for per-shop view and debt drafts (K=8, 6144 tok), for low-agreement questions (conf<0.75) and for every debt question on a shop with the debt layer (4 samples, 16384 tok); non-thinking for the 8 main SQL samples",
@@ -18,7 +18,7 @@
   "seed": 0,
   "language_model_only": true,
   "gpu_validated": false,
-  "note": "Single inference model with one LoRA adapter (v3, same rank and modules as v2), 9.70B params (<= 15B total). fp8 online quant + fp8 KV cache. Run on 1x RTX PRO 4000 Blackwell 24GB outside Docker; the image and RTX 5090 timing are not validated yet. Layout and logs follow zac2026_DataMate_docker_guideline_final.pdf.",
+  "note": "Single inference model (Qwen3.5-9B) with two LoRA adapters of the same rank and modules (v3, v5), 9.74B params with both (<= 15B total). Two passes of the same pipeline, one adapter each, on the same per-shop layers; the samples of both passes vote once (pooled vote). fp8 online quant + fp8 KV cache. Run on 1x RTX PRO 4000 Blackwell 24GB outside Docker; RTX 5090 timing not validated yet.",
   "base_model_path_in_image": "/code/models/Qwen3.5-9B",
   "training_only_models": [
     {

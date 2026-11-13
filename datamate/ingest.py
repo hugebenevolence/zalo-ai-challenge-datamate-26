@@ -102,7 +102,8 @@ def to_number(t):
 ORDER_ID = r"(^|_)(ma|so|id)_?(don|hd|hoa_don|phieu|bill|ct|chung_tu|giao_dich)|^(ma|so)_?(dh|hd)$|^(hd|hoa_don|don_hang|don_so|so_don|order_?id|bill|stt)$"
 STATUS_COL = r"(^|_)(trang_?thai|tinh_?trang|status|xu_?ly|ghi_?chu)"
 CANCELLED = r"(?:^|_)(?:huy|cancel\w*|khong_giao_duoc)(?:_|$)"
-RETURNED = r"(?:^|_)(?:tra_hang|tra_lai|tra_ve|doi_tra|hoan_tra|hoan_hang|return\w*)(?:_|$)|khach_(?:mang_)?tra$"
+RETURNED = r"(?:^|(?<!kiem)_)(?:tra_hang|tra_lai|tra_ve|doi_tra|hoan_tra|hoan_hang|return\w*)(?:_|$)|khach_(?:mang_)?tra$"  # kiểm tra lại = check again (public dev_012: 50 paid tickets dropped)
+STATUS_WORD = r"(?:^|_)(?:huy|tra_hang|tra_lai|tra_ve)(?:_|$)"
 NOTE_ROW = re.compile(r"(?i)^\s*(ghi chú|ghi chu|tổng|tong cong|cộng|total)\b")
 
 
@@ -171,7 +172,7 @@ def prepare(df, year=None):
     for c in [c for c in df.columns if re.search(STATUS_COL, ckey(c)) and df[c].dtype == "string"]:
         k = df[c].map(lambda v: norm(v) if isinstance(v, str) else "")
         huy, tra = k.str.contains(CANCELLED), k.str.contains(RETURNED)
-        if huy.any() or tra.any():
+        if huy.any() or tra.any() or k.str.contains(STATUS_WORD).any():  # flags kept (all false) where only a near miss such as 'kiểm tra lại' occurs, so saved mappings still bind
             df["_huy"], df["_tra"] = huy, tra
             if ids:
                 order = df[ids[0]]
@@ -226,7 +227,14 @@ def profile(db, n, source):
         else:
             lo, hi = db.execute(f"SELECT min({quote(col)}), max({quote(col)}) FROM {quote(n)}").fetchone()
             prof.append((col, typ, None, [str(lo), str(hi)]))
-    return {"name": n, "source": source, "rows": db.execute(f"SELECT count(*) FROM {quote(n)}").fetchone()[0], "columns": prof}
+    rows = db.execute(f"SELECT count(*) FROM {quote(n)}").fetchone()[0]
+    out = {"name": n, "source": source, "rows": rows, "columns": prof}
+    names = [c for c, *_ in prof if not c.startswith("_")]
+    if 0 < rows <= 12 and len(names) <= 10 and not n.startswith("v_"):  # a small lookup table is shown whole: public dev_012 had the
+        # commission rate of each worker only as a range [25..33], and every commission question was abstained
+        fmt = lambda v: v.strftime("%Y-%m-%d") if hasattr(v, "strftime") else v if isinstance(v, (int, float)) or v is None else str(v)[:40]   # noqa: E731
+        out["all_rows"] = [names] + [[fmt(v) for v in r] for r in db.execute(f"SELECT {', '.join(quote(c) for c in names)} FROM {quote(n)}").fetchall()]
+    return out
 
 
 def spelling_key(v):
@@ -291,6 +299,32 @@ def canon_spellings(db, tables):
     return changed
 
 
+STAFF_COL = r"(?:^|_)(?:tho|nhan_vien|nv|ktv|ky_thuat(?:_vien)?|nguoi_(?:ban|lam|xu_ly|thu|phu_trach|giao)|thu_ngan|phuc_vu|staff|seller|cashier)(?:_|$)"
+TITLE = re.compile(r"(?i)^\s*(?:a|anh|c|chi|chị|e|em|cô|co|chú|chu|bác|bac)\s*[.\s]\s*(\S.*)$")
+
+
+def canon_staff(db, tables):
+    """Rulebook §8: names that point at the same thing are the same thing. A hand-kept book writes one worker as 'Đạt', 'a Đạt', 'A.Đạt'
+    (public dev_012: 12 spellings for 4 workers, so every per-worker total was a third of the truth). In a staff column, a value that is a
+    title or its initial (anh/chị/em/cô/chú/bác, a./c./e.) before a name the same column also holds bare becomes that bare name."""
+    changed = 0
+    for t in tables:
+        if t == "calendar":
+            continue
+        for col, typ, *_ in db.execute(f"DESCRIBE {quote(t)}").fetchall():
+            if typ != "VARCHAR" or col.startswith("_") or not re.search(STAFF_COL, ckey(col)):
+                continue
+            vals = [v for (v,) in db.execute(f"SELECT DISTINCT {quote(col)} FROM {quote(t)} WHERE {quote(col)} IS NOT NULL").fetchall()]
+            bare = defaultdict(list)
+            for v in vals:
+                bare[spelling_key(v)].append(v)
+            for v in vals:
+                m = TITLE.match(v)
+                if m and len(bare.get(spelling_key(m.group(1)), [])) == 1 and bare[spelling_key(m.group(1))][0] != v:
+                    changed += db.execute(f"UPDATE {quote(t)} SET {quote(col)} = ? WHERE {quote(col)} = ?", [bare[spelling_key(m.group(1))][0], v]).fetchone()[0]
+    return changed
+
+
 def load_business(root, business, canon=False):
     root = Path(root)
     folder = root / "data" / business
@@ -323,6 +357,7 @@ def load_business(root, business, canon=False):
         raise ValueError(f"No usable tables: {folder}")
     if canon:
         canon_spellings(db, list(tables))
+        canon_staff(db, list(tables))
     if (root / "calendar.csv").exists():
         db.execute("CREATE TABLE calendar AS SELECT * FROM read_csv_auto(?, header=true)", [str(root / "calendar.csv")])
         tables["calendar"] = "calendar.csv"
@@ -344,8 +379,37 @@ def load_business(root, business, canon=False):
         hidden.update(names)
 
     info = [profile(db, n, tables[n]) for n in tables if n not in hidden]
+    for t in info:
+        if t["name"] != "calendar" and (lv := order_level(db, t["name"])):
+            t["order_level"] = lv
     readme = "\n\n".join(p.read_text(encoding="utf-8-sig") for p in sorted(folder.rglob("*.md")))
     return db, {"tables": info, "readme": readme}
+
+
+def order_level(db, n):
+    """Numeric columns of a line table that hold one value per ORDER, repeated on every line (an order discount, a trade-in, the amount the
+    customer paid). Summed over lines they count the order once per line: public dev_011 trade-in 1,216M summed over lines for 641M once per
+    order; samples also answered the order's amount due with revenue. -> the columns, for the schema text."""
+    cs = [(r[0], r[1]) for r in db.execute(f"DESCRIBE {quote(n)}").fetchall()]
+    ids = [c for c, _ in cs if re.search(ORDER_ID, ckey(c))]
+    if not ids:
+        return []
+    oid = quote(ids[0])
+    rows, orders = db.execute(f"SELECT count(*), count(DISTINCT {oid}) FROM {quote(n)}").fetchone()
+    if not orders or rows < 1.2 * orders:
+        return []
+    out, varies = [], False
+    for c, typ in cs:
+        if c in ids or c.startswith("_") or not typ.startswith(("DOUBLE", "BIGINT", "INTEGER", "DECIMAL", "FLOAT", "HUGEINT", "SMALLINT")):
+            continue
+        rep, same = db.execute(f"""SELECT count(*), count(*) FILTER (WHERE nd = 1) FROM (SELECT count(DISTINCT {quote(c)}) AS nd FROM {quote(n)}
+            GROUP BY {oid} HAVING count({quote(c)}) >= 2 AND max(abs({quote(c)})) > 0)""").fetchone()
+        if rep >= 20 and same >= 0.99 * rep:
+            out.append(c)
+        varies |= rep >= 20 and same < 0.5 * rep
+    # only a table whose lines differ (quantity, line amount): in a book of equal instalments every payment of a contract has the same
+    # amount, and those rows are to be summed (public dev_014 'Đã góp')
+    return out if varies else []
 
 
 def entity_hits(db, meta, question, limit=12):
@@ -376,6 +440,12 @@ def schema_text(meta):
             else:
                 tag = "values" if d <= 25 else f"{d} distinct, e.g."
                 out.append(f"  {quote(col)} {typ}  {tag} {json.dumps([str(v)[:60] for v in vals], ensure_ascii=False)}")
+        if t.get("all_rows"):
+            out.append(f"  -- all {len(t['all_rows']) - 1} rows ({', '.join(json.dumps(c, ensure_ascii=False) for c in t['all_rows'][0])}): "
+                       + "; ".join(json.dumps(r, ensure_ascii=False, default=str) for r in t["all_rows"][1:]))
+        if t.get("order_level"):
+            out.append(f"  -- ORDER-LEVEL: {', '.join(quote(c) for c in t['order_level'])} hold ONE value per order, repeated on every line of the order: "
+                       "take it once per order (one row per order id, of valid orders) before summing or averaging, never SUM it over lines")
     return "\n".join(out)
 
 

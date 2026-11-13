@@ -18,7 +18,7 @@ case "${1:-}" in
     python3 scripts/pack_training_code.py
     ;;
   build)
-    for f in models/Qwen3.5-9B/config.json adapters/sql_rft_v3/adapter_model.safetensors build/training_code/data_manifest.json; do
+    for f in models/Qwen3.5-9B/config.json adapters/sql_rft_v3/adapter_model.safetensors adapters/sql_v5/adapter_model.safetensors build/training_code/data_manifest.json; do
       [ -s "$f" ] || { echo "missing $f (base model download, git lfs pull, docker/build.sh pack)" >&2; exit 1; }
     done
     DOCKER_BUILDKIT=1 $DOCKER build --platform linux/amd64 -f docker/Dockerfile -t "$IMAGE" .

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Retrain the three LoRA adapters from the packaged SFT data, in order (each continues from the previous one). See README.md.
+# Retrain the four LoRA adapters from the packaged SFT data, in order (each continues from the previous one). See README.md.
 #   bash /code/training_code/train.sh            # inside the image (training venv /opt/venv-train, base model /code/models/Qwen3.5-9B)
-# One GPU with >= 24 GB. Measured on 1x RTX PRO 4000 Blackwell 24 GB: v1 3.8 h, v2 6.9 h, v3 8.2 h.
+# One GPU with >= 24 GB. Measured on 1x RTX PRO 4000 Blackwell 24 GB: v1 3.8 h, v2 6.9 h, v3 8.2 h, v5 about 11 h.
 set -euo pipefail
 cd "$(dirname "$0")"
 PY=${PYTHON:-/opt/venv-train/bin/python}
@@ -15,4 +15,6 @@ $PY src/train_lora.py data/sft/sql_rft_v1.jsonl --out "$OUT/sql_rft_v1" --max-le
 $PY src/train_lora.py data/sft/sql_rft_v2.jsonl --out "$OUT/sql_rft_v2" --init-adapter "$OUT/sql_rft_v1/adapter" --max-len 20000 --lr 5e-5 "${COMMON[@]}"
 $PY src/train_lora.py data/sft/sql_rft_v3_notes.jsonl --out "$OUT/sql_rft_v3" --init-adapter "$OUT/sql_rft_v2/adapter" --max-len 32768 --lr 5e-5 \
     "${COMMON[@]}" --completion-logits
-echo "adapters in $OUT/sql_rft_v{1,2,3}/adapter; the inference adapter is $OUT/sql_rft_v3/adapter (packaged one: /code/models/lora)"
+$PY src/train_lora.py data/sft/sql_v5_mix.jsonl --out "$OUT/sql_v5" --init-adapter "$OUT/sql_rft_v3/adapter" --max-len 32768 --lr 5e-5 \
+    "${COMMON[@]}" --completion-logits
+echo "adapters in $OUT/sql_rft_v{1,2,3}/adapter and $OUT/sql_v5/adapter; the inference adapters are sql_rft_v3 and sql_v5 (packaged: /code/models/lora, /code/models/lora_v5)"

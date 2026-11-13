@@ -90,7 +90,12 @@ def to_answer(kind, names, rows):
     return v
 
 
-CHANGE = re.compile(r"(?:^|_)(?:tang|giam(?!_(?:dau|gia|can|beo|mo|sot))|thay_doi|hon_hay_kem|cao_hay_thap|len_xuong|tang_truong|chenh_lech)(?:_|$)")  # giảm đau / giảm giá name an item or a discount, not a change
+CHANGE = re.compile(r"(?:^|_)(?:(?<!qua_)tang(?!_kem)|giam(?!_(?:dau|gia|can|beo|mo|sot))|thay_doi|hon_hay_kem|cao_hay_thap|len_xuong|tang_truong|chenh_lech)(?:_|$)")  # giảm đau / giảm giá name an item or a discount, not a change
+NOT_RISE = re.compile(r"(?i)t[ặầ]ng")   # tặng (a gift) and tầng (a floor) lose their accents to the same letters as tăng (a rise)
+
+
+def asks_change(question: str) -> bool:
+    return bool(CHANGE.search(norm(NOT_RISE.sub("x", question))))
 
 
 GROSS = re.compile(r"(?:^|_)(?:lai_gop|loi_nhuan_gop|lai_go)(?:_|$)")
@@ -113,7 +118,7 @@ def execute(db, text, question="", trace=None):
     if not sql or not re.match(r"(?is)\s*(with|select|from)\b", sql) or re.search(r"(?i)\b(insert|update|delete|create|drop|alter|copy|attach|install|load|pragma)\b", sql):
         raise ValueError("need one read-only SELECT query in ```sql```")
     sql = re.sub(r'"(%[^"]*)"', r"'\1'", sql)  # a double-quoted strftime format is a string, never a column
-    if kind == "percent" and CHANGE.search(norm(question)) and "-" not in re.sub(r"'[^']*'", "", sql):
+    if kind == "percent" and asks_change(question) and "-" not in re.sub(r"'[^']*'", "", sql):
         # 14B often writes 100*new/old after planning 100*(new-old)/old. Lint it into the repair turn
         raise ValueError("a change in % is ROUND(100.0 * (new - old) / old, 2), negative when it fell; this query has no subtraction")
     if DEBT_WORDS.search(norm(question)) and not DEBT_CALL.search(sql) and has_debt_layer(db):

@@ -1,5 +1,5 @@
 # The DataMate private-test image, laid out as the organizers' guide asks (zac2026_DataMate_docker_guideline_final.pdf):
-#   /code/predict.sh  /code/README.md  /code/requirements.txt  /code/src (inference code)  /code/models (Qwen3.5-9B + LoRA v3)
+#   /code/predict.sh  /code/README.md  /code/requirements.txt  /code/src (inference code)  /code/models (Qwen3.5-9B + LoRA v3 and v5)
 #   /code/assets (few-shot bank)  /code/training_code (training code, data, logs, checkpoints, data_manifest.json)
 # Build from the repo root, after `git lfs pull`, the base model in models/Qwen3.5-9B and `python3 scripts/pack_training_code.py`:
 #   docker build --platform linux/amd64 -f docker/Dockerfile -t zaic2026_datamate_<team_name>:final .
@@ -25,10 +25,12 @@ RUN python3 -m venv /opt/venv-train \
 # Weights first, so a code change does not invalidate their layers
 COPY models/Qwen3.5-9B /code/models/Qwen3.5-9B
 COPY adapters/sql_rft_v3 /code/models/lora
+COPY adapters/sql_v5 /code/models/lora_v5
 COPY build/training_code/ /code/training_code/
-COPY assets/fewshot_bank.jsonl /code/assets/fewshot_bank.jsonl
+COPY assets/fewshot_bank.jsonl assets/fewshot_bank_v2.jsonl /code/assets/
 COPY docker/README.md /code/README.md
 COPY docker/predict.sh scripts/flags.sh docker/model_manifest.json /code/
 COPY datamate /code/src/datamate
+COPY analysis/pool_runs.py /code/src/analysis/pool_runs.py
 RUN chmod +x /code/predict.sh
 CMD ["bash", "/code/predict.sh"]

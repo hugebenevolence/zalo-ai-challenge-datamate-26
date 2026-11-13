@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from . import debts, fewshot, views
-from .hints import DEBT_WORDS, data_span, outside, question_hints
+from .hints import DEBT_WORDS, data_span, outside, question_hints, rule_lines, rule_rows
 from .ingest import entity_hits, load_business, norm, profile, schema_text
 from .prompts import NOTES, SYSTEM, SYSTEM_ALT, chat, repair_hint
 from .sqlexec import execute, parse
@@ -29,7 +29,7 @@ def load_questions(a):
     """The questions of this run: --ids / --limit filters, then this process's share of the shops (--shard i/n)."""
     qs = [json.loads(l) for l in (a.data / "questions.jsonl").read_text(encoding="utf-8-sig").splitlines() if l.strip()]
     if a.ids:
-        keep = set(re.findall(r"q_[0-9a-f]+", a.ids.read_text()))
+        keep = set(re.findall(r"[A-Za-z0-9]+_[0-9a-f]+", a.ids.read_text()))  # ids in a TXT or JSONL file: q_<hex>, or any <prefix>_<hex>
         qs = [q for q in qs if q["id"] in keep]
     qs = qs[:a.limit] if a.limit else qs
     i, n = map(int, a.shard.split("/"))
@@ -58,6 +58,7 @@ class Pipeline:
     def __init__(self, a, engine=None):
         self.a, self.engine = a, engine
         self.rulebook = (a.data / "rulebook.md").read_text(encoding="utf-8-sig")
+        self.rule_rows = rule_rows(self.rulebook)
         base_prompts = (SYSTEM, SYSTEM) if a.fewshot else (SYSTEM, SYSTEM_ALT)
         self.systems = [s + "\n\nRULEBOOK:\n" + self.rulebook for s in base_prompts]
         self.bank = fewshot.Bank(a.fewshot) if a.fewshot else None
@@ -76,6 +77,7 @@ class Pipeline:
                 db, meta = load_business(self.a.data, b, canon=self.a.canon_names)
                 db.execute("SET enable_external_access = false")  # model SQL cannot read files or the network
                 db.execute("SET memory_limit = '6GB'")  # a runaway model join fails (-> repair) instead of exhausting host RAM
+                db.execute("SET max_temp_directory_size = '4GB'")  # ... and instead of spilling to disk without end (the default is 90% of the free disk)
                 loaded[b] = db, meta
             except Exception as e:
                 print(f"[load error] {b}: {e}", flush=True)
@@ -109,7 +111,7 @@ class Pipeline:
             vchat_of = dict(zip(shops, vchats))
             convo = {(b, j): vchat_of[b] + [{"role": "assistant", "content": texts[b][j].split("</think>")[-1].strip()}] for b in shops for j in range(len(texts[b]))}
             n_fix = 0
-            for _ in range(2):
+            for _ in range(3):  # three turns: a draft often fails two or three data tests
                 fail = [(b, j) for b, c in checked.items() for j, (fp, _) in enumerate(c) if fp is None]
                 if not fail:
                     break
@@ -149,33 +151,35 @@ class Pipeline:
         a, vfixed, vtexts, vchecked = self.a, self.vfixed, self.vtexts, self.vchecked
         view, vinfo = "", {}
         if b in vfixed:
-            sql, nv, verr = vfixed[b]["sql"], vfixed[b]["agree"], vfixed[b]["errors"]
+            sql, nv, verr = views.rewrap(vfixed[b]["sql"]), vfixed[b]["agree"], vfixed[b]["errors"]
             vtexts[b] = vfixed[b]["drafts"]
             if sql:
                 views.build(db, sql)
         elif b in vtexts:
-            sql, nv = views.pick(db, vchecked[b])
             verr = [e for fp, e in vchecked[b] if fp is None]
-            if not sql or nv * 4 < a.k:  # too few drafts pass the catalog test: the most common one that only fails that test
-                soft, sn = views.pick_soft(db, vtexts[b])
-                if sn > nv:
-                    sql, nv = soft, sn
-                elif sql:
-                    views.build(db, sql)
-            if sql and len(bad := views.mixed_price_items(db, "v_sales")) >= 2:  # qty is still not in one base unit
-                fixed = views.qty_by_price(sql)
-                views.build(db, fixed)
-                left = views.mixed_price_items(db, "v_sales")
-                if len(left) < len(bad):  # factors read from the prices only help when unit holds the line's own unit
-                    sql = fixed
-                else:
-                    views.build(db, sql)
-                print(f"[views] {b}: price per qty differs over 3x on {len(bad)} items, factors read from the prices -> {len(left)} left, kept={sql == fixed}", flush=True)
+            try:
+                sql, nv = self.pick_views(b, db)
+            except Exception as e:  # a draft that ran into the time limit when built again: no view rather than a stuck or crashed run
+                sql, nv = None, 0
+                print(f"[views] {b}: pick failed, no view: {str(e)[:200]}", flush=True)
         if b in vtexts:
             # drafts behind the pick: a saved layer keeps no drafts, so its own count (prompts of the 0.683 run said "7/0" there)
             nk = len(vtexts[b]) or (vfixed[b].get("k") if b in vfixed else 0) or a.k
             if sql and nv * 4 >= a.k:  # too little agreement = the mapping is a guess. Better no view than a wrong one (counted against one set of a.k drafts)
-                view = views.describe(db, sql, nv, nk)
+                try:
+                    with views.watchdog(db, 120):
+                        order_cols = views.add_order_level(db, sql)
+                except Exception as e:  # the views stay as built
+                    order_cols = None
+                    print(f"[views] {b}: order-level columns not added: {str(e)[:150]}", flush=True)
+                catalog_cols = None
+                if getattr(a, "catalog_cols", False):
+                    try:
+                        with views.watchdog(db, 120):
+                            catalog_cols = views.add_catalog(db)
+                    except Exception as e:
+                        print(f"[views] {b}: catalog columns not added: {str(e)[:150]}", flush=True)
+                view = views.describe(db, sql, nv, nk, order_cols, catalog_cols)
                 meta["tables"] += [profile(db, v, "canonical view") for v in ("v_sales", "v_orders")]
             vinfo = {"agree": nv, "k": nk, "used": bool(view), "sql": sql, "errors": verr, "drafts": vtexts[b]}
             print(f"[views] {b}: {nv}/{nk} agree, used={bool(view)}, {len(verr)} failed drafts", flush=True)
@@ -187,10 +191,11 @@ class Pipeline:
             dk = dfixed[b].get("k", a.k) if b in dfixed else len(dchecked[b])  # a reused file keeps its own verdict and draft count: re-judging it at another k, or from a reuse that lost "checked", dropped a working layer
             if sqls and (dfixed[b]["used"] if b in dfixed else debts.accept(dfps, dn, a.k)):
                 try:
-                    debts.build(db, sqls)  # the tables stay out of SCHEMA: the prompt offers the macros and their recipes
+                    with views.watchdog(db, 120):
+                        debts.build(db, sqls)  # the tables stay out of SCHEMA: the prompt offers the macros and their recipes
                     debt = debts.describe(dn, dk)
-                except ValueError as e:  # a reused layer that fails a data test added after it was saved: no layer rather than a crash
-                    print(f"[debts] {b}: reused layer rejected: {str(e)[:200]}", flush=True)
+                except Exception as e:  # a reused layer that fails a data test added after it was saved, or a build that ran into the time limit: no layer rather than a crash
+                    print(f"[debts] {b}: layer rejected: {str(e)[:200]}", flush=True)
             if a.output:
                 (a.output / "logs" / f"_debt_{b}.json").write_text(json.dumps({"agree": dn, "k": dk, "used": bool(debt), "sqls": sqls, "checked": dfps,
                                                                              "errors": [e for fp, e in dchecked.get(b, []) if fp is None]}, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -202,21 +207,68 @@ class Pipeline:
         ctx = "README:\n" + meta["readme"] + "\n\nSCHEMA:\n" + schema_text(shown) + raw_note + ("\n\nCANONICAL VIEWS:\n" + view if view else "") + ("\n\n" + debt if debt else "")
         return Shop(b, db, meta, shown, view, debt, ctx, vinfo)
 
+    def pick_views(self, b, db):
+        """The shop's mapping SELECT and how many drafts stand behind it, with the views built from it. Every build runs under
+        views.watchdog."""
+        a, vtexts, vchecked = self.a, self.vtexts, self.vchecked
+        sql, nv = views.pick(db, vchecked[b])
+        if not sql or nv * 4 < a.k:  # too few drafts pass the catalog test: the most common one that only fails that test
+            soft, sn = views.pick_soft(db, vtexts[b])
+            if sn > nv:
+                sql, nv = soft, sn
+            elif sql:
+                with views.watchdog(db, 120):
+                    views.build(db, sql)
+        if sql and len(bad := views.mixed_price_items(db, "v_sales")) >= 2:  # qty is still not in one base unit
+            fixed = views.qty_by_price(sql)
+            try:
+                with views.watchdog(db, 120):
+                    views.build(db, fixed)
+                    left = views.mixed_price_items(db, "v_sales")
+            except Exception:
+                left = bad
+            if len(left) < len(bad):  # factors read from the prices only help when unit holds the line's own unit
+                sql = fixed
+            else:
+                with views.watchdog(db, 120):
+                    views.build(db, sql)
+            print(f"[views] {b}: price per qty differs over 3x on {len(bad)} items, factors read from the prices -> {len(left)} left, kept={sql == fixed}", flush=True)
+        return sql, nv
+
     def build_chats(self, shop, todo):
         """Per question: values matching it, its hints, whether its period lies outside the data. Then one chat per prompt."""
         a, bank = self.a, self.bank
         for q in todo:
             q["_hits"] = entity_hits(shop.db, shop.shown, q["question"])
-            q["_periods"] = question_hints(q["question"], q["as_of_date"], shop.db, shop.shown)
+            q["_periods"] = question_hints(q["question"], q["as_of_date"], shop.db, shop.shown, self.rule_rows)
             q["_oor"] = outside(q["_periods"], data_span(shop.meta))
+            if a.rule_lines:
+                q["_rules"] = rule_lines(q["question"], self.rule_rows)
         # examples read the canonical views, so a shop without them gets none
         return [[chat(s, shop.ctx, q, fewshot.block(bank.retrieve(q["question"], shop.name, a.fewshot_k, debt=bool(shop.debt))) if bank and shop.view and j == 1 else "")
                  for j, s in enumerate(self.systems)] for q in todo]
 
     # ---- sampling ----------------------------------------------------------------------------------------------------
+    def split(self, p):
+        """Plain samples of prompt p per adapter: `half` split evenly, the remainder going to a different adapter on each prompt."""
+        m = max(1, len(self.a.lora or []))
+        return [self.half // m + ((j - p) % m < self.half % m) for j in range(m)]
+
+    def adapter(self, j):
+        """The adapter of sample j: plain samples follow split() prompt by prompt, thinking samples take the adapters in turn."""
+        m = max(1, len(self.a.lora or []))
+        plain = [x for p in range(len(self.systems)) for x, n in enumerate(self.split(p)) for _ in range(n)]
+        return plain[j] if j < len(plain) else (j - len(plain)) % m
+
+    def _lora(self, js):
+        """The `lora` argument of Engine.chat for a batch whose chats belong to samples js."""
+        return [self.adapter(j) for j in js] if len(self.a.lora or []) > 1 else True
+
     def _call(self, i, kind, j, text, thinking_mode=False, lora=True):
         """Log one model generation for question i (call order kept for the per-question log)."""
-        self._calls[i].append({"kind": kind, "sample": j, "thinking_mode": thinking_mode, "lora": bool(lora and self.a.lora), "text": text})
+        used = bool(lora and self.a.lora)
+        self._calls[i].append({"kind": kind, "sample": j, "thinking_mode": thinking_mode, "lora": used,
+                               **({"adapter": str(self.a.lora[self.adapter(j)])} if used and len(self.a.lora) > 1 else {}), "text": text})
 
     def _exec(self, shop, i, j, text, question):
         """Execute sample j of question i and log the SQL as run, its output or its error."""
@@ -242,7 +294,7 @@ class Pipeline:
             for i, j in pairs:
                 e = errs[i][j].split(" | ")[-1]
                 conv[i, j].append({"role": "user", "content": f"ERROR: {e}\n{repair_hint(e)}Fix the query. Answer again in the same format."})
-            routs = eng.chat([conv[ij] for ij in pairs], eng.params(n=1, temperature=0, max_tokens=a.max_tokens), lora=True)
+            routs = eng.chat([conv[ij] for ij in pairs], eng.params(n=1, temperature=0, max_tokens=a.max_tokens), lora=self._lora([j for _, j in pairs]))
             for (i, j), o in zip(pairs, routs):
                 out = o.outputs[0].text
                 self._call(i, "repair", j, out)
@@ -261,13 +313,15 @@ class Pipeline:
         a, eng, half, systems, bank = self.a, self.engine, self.half, self.systems, self.bank
         budget = a.context - a.max_tokens - 64
         fits = [max(eng.n_tokens(c) for c in cs) <= budget for cs in chats]
-        sp = eng.params(n=half, temperature=a.temperature, top_p=0.95, max_tokens=a.max_tokens, seed=a.seed)
-        batch = [c for cs, f in zip(chats, fits) if f for c in cs]
-        if a.notes:
-            batch = [c + [{"role": "assistant", "content": NOTES}] for c in batch]
-        outs = eng.chat(batch, sp, lora=True, prefill=a.notes)
+        sp = lambda n: eng.params(n=n, temperature=a.temperature, top_p=0.95, max_tokens=a.max_tokens, seed=a.seed)
+        # one request per prompt and adapter (one adapter: one request of `half` samples per prompt, as before the ensemble)
+        plan = [[(m, n) for m, n in enumerate(self.split(p)) if n] for p in range(len(systems))]
+        batch = [(c, m, n) for cs, f in zip(chats, fits) if f for c, reqs in zip(cs, plan) for m, n in reqs]
+        note = [{"role": "assistant", "content": NOTES}] if a.notes else []
+        outs = eng.chat([c + note for c, _, _ in batch], sp(half) if len(a.lora or []) < 2 else [sp(n) for _, _, n in batch],
+                        lora=True if len(a.lora or []) < 2 else [m for _, m, _ in batch], prefill=a.notes)
         it = iter(outs)
-        texts = [[(NOTES if a.notes else "") + o.text for _ in systems for o in next(it).outputs] if f else [] for f in fits]
+        texts = [[(NOTES if a.notes else "") + o.text for reqs in plan for _ in reqs for o in next(it).outputs] if f else [] for f in fits]
         self._calls, self._runs = [[] for _ in todo], [[] for _ in todo]  # per question: model calls and SQL runs, in order
         for i, ts in enumerate(texts):
             for j, t in enumerate(ts):
@@ -287,7 +341,7 @@ class Pipeline:
         notype = [(i, j) for i, j in repair if errs[i][j].startswith("missing or invalid TYPE") and parse(texts[i][j])[1]]
         if notype:
             tchats = [chats[i][j // half] + [{"role": "assistant", "content": texts[i][j].rstrip() + "\nTYPE:"}] for i, j in notype]
-            touts = eng.chat(tchats, eng.params(n=1, temperature=0, max_tokens=4), lora=True, prefill=True)
+            touts = eng.chat(tchats, eng.params(n=1, temperature=0, max_tokens=4), lora=self._lora([j for _, j in notype]), prefill=True)
             for (i, j), o in zip(notype, touts):
                 self._call(i, "type_fill", j, o.outputs[0].text)
                 texts[i][j] = texts[i][j].rstrip() + "\nTYPE:" + o.outputs[0].text
@@ -307,7 +361,7 @@ class Pipeline:
                 # with examples available all thinking samples get them: right 86% vs 71.5% on 873 hard train questions
                 hchats = [chats[i][1 if bank else s % len(systems)] for i in hard for s in range(a.think_k)]
                 houts = eng.chat(hchats, eng.params(n=1, temperature=0.6, top_p=0.95, top_k=20, max_tokens=a.think_budget + a.max_tokens, seed=a.seed),
-                                 thinking=True, lora=a.lora_thinking)
+                                 thinking=True, lora=a.lora_thinking and self._lora([2 * half + s for _ in hard for s in range(a.think_k)]))
                 for n, o in enumerate(houts):
                     i, t = hard[n // a.think_k], o.outputs[0].text
                     if "<think>" not in t:  # Qwen3.5's template opens <think> in the prompt and parse() keys on it to spot a cut-off thought

@@ -1,14 +1,14 @@
 # DataMate: training code and evidence
 
-The inference adapter `/code/models/lora` is LoRA v3, the last of three QLoRA rounds on Qwen3.5-9B. Each round continues from
-the previous adapter: v1, then v2, then v3. All training data come from the provided **train** split. No public or private
+The image answers with two LoRA adapters on Qwen3.5-9B, in two passes whose votes are pooled: `/code/models/lora` is LoRA v3 and `/code/models/lora_v5` is LoRA v5. v1, v2 and v3 are three QLoRA rounds; v5 continues from v3 (see "LoRA v5" below). Each round continues from
+the previous adapter: v1, then v2, then v3, then v5. The data of v1 to v3 come from the provided **train** split; v5 adds synthetic shops made by our own generator. No public or private
 test data was used for training, and no test answers were collected.
 
 ## What is here
 
 | Path | Content |
 | --- | --- |
-| `train.sh` | Retrains v1, v2 and v3 from the packaged SFT data, with the exact settings below |
+| `train.sh` | Retrains v1, v2, v3 and v5 from the packaged SFT data, with the exact settings below |
 | `requirements.txt` | Pinned training stack. The image installs it in `/opt/venv-train`, plus `fla-core==0.6.0 --no-deps` |
 | `src/` | `train_lora.py` (Unsloth QLoRA, loss on the reply only), `check_fla.py` (fla kernel vs PyTorch reference), `merge_lora.py`, `no_fla/` |
 | `data_generation/` | `build_sft.py` (selects correct samples as SFT rows), `add_notes.py` (notes before the SQL), `build_fewshot_bank.py`, `build_pool.py`, and the `datamate` package that produced the samples |
@@ -69,3 +69,16 @@ PYTHONPATH=data_generation:/code/src python3 data_generation/add_notes.py /tmp/s
 - v3 used the fla Gated DeltaNet kernels (fla-core 0.6.0, checked by `check_fla.py`) and `--completion-logits`. Its throughput,
   1,301 tokens/s, matches that speed check. The flag computes the same loss, only on fewer positions.
 - GPU kernels and 4-bit quantization make a retrained adapter close to the packaged one but not bit-identical.
+
+## LoRA v5
+
+v5 continues from v3 (`--init-adapter`), same rank, modules and settings as v3, on `data/sft/sql_v5_mix.jsonl` (4,300 rows, none dropped,
+538 steps, about 11 h on the same GPU):
+
+| Source | Rows | Made by |
+|---|---|---|
+| synthetic shops, generator v2 | 3,300 | `data_generation/synth/` renders shops into messy files (several archetypes, units, side books), draws a different rule set per split (term names and definitions), computes every answer in code and keeps a question only when its SQL, run by the pipeline's own executor on the rendered files, gives that answer. `build_synth3.sh` / `build_synth4.sh` rebuild the splits and rows; `mix_v5.py` makes the mix |
+| OpenAI teacher on synthetic shops | 500 | `synth/teacher.py`: replies written by an OpenAI model for questions on synthetic shops only, kept when they matched the computed answer. The organizers allowed API use for synthetic data; no public or private test data was ever sent |
+| train split | 500 | rows of the v3 data, so the train distribution stays in the mix |
+
+The few-shot bank of the v5 pass is `data/fewshot_bank_v2.jsonl` (the train bank plus verified synthetic examples that read only the canonical views).
