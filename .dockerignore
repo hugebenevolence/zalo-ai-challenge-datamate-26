@@ -4,6 +4,8 @@
 !datamate/*.py
 !training/requirements.txt
 !assets/fewshot_bank.jsonl
+!assets/fewshot_bank_v2.jsonl
+!analysis/pool_runs.py
 !scripts/flags.sh
 !docker/predict.sh
 !docker/requirements.txt
@@ -11,5 +13,6 @@
 !docker/README.md
 !models/Qwen3.5-9B
 !adapters/sql_rft_v3
+!adapters/sql_v5
 !build/training_code
 **/__pycache__
