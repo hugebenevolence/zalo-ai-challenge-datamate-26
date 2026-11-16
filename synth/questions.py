@@ -6,7 +6,6 @@ a period wholly outside the data, or information the shop does not record. Phras
 typos) is applied last and never touches numbers or dates.
 """
 import hashlib
-import math
 import re
 import unicodedata
 from datetime import date, timedelta
@@ -194,7 +193,7 @@ def q_top_item(rng, f: Facts):
     if len(t) == 0 or not ok_top(t, "qty_base", 1):
         return None
     word = "món" if f.shop.kind == "fnb" else str(rng.choice(["mặt hàng", "sản phẩm", "hàng"]))
-    q = str(rng.choice([f"{{W}} bán chạy nhất {{p}} là gì?", f"{{P}} {word} nào bán được nhiều nhất?", f"{{W}} nào hot nhất {{p}}?"]))
+    q = str(rng.choice(["{W} bán chạy nhất {p} là gì?", f"{{P}} {word} nào bán được nhiều nhất?", "{W} nào hot nhất {p}?"]))
     return _fmt(q.replace("{W}", word.capitalize()).replace("{w}", word), ph), "string", t["name"].iloc[0], [t["code"].iloc[0]]
 
 

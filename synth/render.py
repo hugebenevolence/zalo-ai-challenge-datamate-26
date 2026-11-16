@@ -5,7 +5,7 @@ and a hand-kept ledger (one sheet per month, two header rows, money written as '
 serials, order-level cells filled only on an order's first line, duplicated lines inside an order). Header names come from
 the train READMEs. The messiness never changes the answers: the rulebook says how to read each of these (section 8).
 """
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 import numpy as np

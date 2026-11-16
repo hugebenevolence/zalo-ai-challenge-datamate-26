@@ -1,5 +1,6 @@
-# The submitted setup (public 0.683, 2026-11-06), sourced by scripts/run_public.sh, scripts/run_holdout.sh and docker/predict.sh
-# so the three always run the same flags. Paths of the model, the adapter and the example bank are set by each caller.
+# Flags of the submitted setup (public 0.800, 2026-11-13), sourced by docker/predict.sh, scripts/run_pool.sh, scripts/run_public.sh
+# and scripts/run_holdout.sh so they always run the same pipeline. Paths of the model, the adapters and the example banks are set by
+# each caller.
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 VLLM_NO_USAGE_STATS=1 TOKENIZERS_PARALLELISM=false PYTHONHASHSEED=0
 export VLLM_USE_FLASHINFER_SAMPLER="${VLLM_USE_FLASHINFER_SAMPLER:-0}"
 DATAMATE_FLAGS=(--quant "${QUANT:-fp8}" --k 8 --think-k 4 --context 49152 --think-budget 16384 --notes --max-tokens 2048

@@ -654,7 +654,7 @@ def k_plan(c: Ctx):
                 return None
             return out("plan", c.pick([f"{cap(ph)} thu được bao nhiêu tiền {pw} của các đơn {plan}?", f"Tiền {pw} {plan} thu về {ph} là bao nhiêu?"]), "number",
                        int(e["amount"].sum()), f"SELECT ROUND(SUM({paid_amt})) FROM {T2} WHERE {is_paid}{win(paid_d, a, b)}",
-                       [f"Rule: money collected for a period belongs to the report period by the day it was paid.", how, per_note])
+                       ["Rule: money collected for a period belongs to the report period by the day it was paid.", how, per_note])
         if form == "share":
             o = per(c.orders, a, b)
             if o.empty or not o["revenue"].sum():
@@ -672,7 +672,7 @@ def k_plan(c: Ctx):
             sql = (f"SELECT ROUND(SUM({c2('tiền kỳ')})) FROM {T2} WHERE {win('CAST(' + c2('hạn trả') + ' AS DATE)', a, b)}" if layout == "sched" else
                    f"WITH s AS ({sched}) SELECT ROUND(SUM(amount)) FROM s WHERE {win('due_date', a, b)}")
             return out("plan", f"{cap(ph)} có bao nhiêu tiền {pw} {plan} đến hạn?", "number", int(e["amount"].sum()), sql,
-                       [f"Rule: a period falls in the report period by its due date, paid or not.", how, per_note])
+                       ["Rule: a period falls in the report period by its due date, paid or not.", how, per_note])
         r = c.rules["pl_late"]
         e = S[(S["due"] >= a) & (S["due"] <= b)]
         due_c, paid_c = f"CAST({c2('hạn trả')} AS DATE)", c2("ngày trả kỳ")

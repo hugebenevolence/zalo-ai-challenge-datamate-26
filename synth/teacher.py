@@ -15,7 +15,6 @@ import json
 import os
 import random
 import re
-import shutil
 import tempfile
 import time
 from collections import Counter, defaultdict

@@ -64,7 +64,7 @@ for k, (name, fc, tc) in enumerate(parts):
     yy = 3.6 - k * 0.5
     gbox(ax, X2 + 0.18, yy, W2 - 0.36, 0.38, fc, mix(tc, 0.35), lw=0.9, r=0.1, z=3)
     ax.text(X2 + W2 / 2, yy + 0.19, name, ha="center", va="center", fontsize=12, color=tc, zorder=5)
-title(X2 + W2 / 2, "Prompt", C["dark"], [("≈ ", {}), ("12k", B), (" tokens", {})])
+title(X2 + W2 / 2, "Prompt", C["dark"], [("≈ ", {}), ("14k", B), (" tokens", {})])
 
 # ---- 3 LLM ---------------------------------------------------------------------------------------------------------------------
 X3, X3e = 8.4, 10.15

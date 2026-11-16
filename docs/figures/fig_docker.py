@@ -14,7 +14,7 @@ layers = [  # bottom to top
     ("Base image", "vllm-openai v0.32.0, pinned by digest", "#E4E4E4", C["dark"]),
     ("Runtime libraries", "duckdb, pandas, openpyxl, calamine", C["b_fill"], C["b_text"]),
     ("Base model", "Qwen3.5-9B at a fixed revision", C["p_fill"], C["p_text"]),
-    ("LoRA adapter", "trained on the training split only", C["g_fill"], C["g_text"]),
+    ("LoRA adapters v3 and v5", "train split and synthetic data only", C["g_fill"], C["g_text"]),
     ("Code and example bank", "datamate package and few-shot bank", C["y_fill"], C["y_text"]),
     ("Entry point", "predict.sh", C["r_fill"], C["r_edge"]),
 ]

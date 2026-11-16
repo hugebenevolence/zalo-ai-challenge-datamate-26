@@ -3,7 +3,7 @@
 <img src="docs/assets/banner.svg" alt="DataMate: Vietnamese questions over messy shop data, answered by voted DuckDB SQL" width="100%">
 
 <p>
-  <a href="#results"><img alt="Public PA" src="https://img.shields.io/badge/public%20PA-0.683-2ea44f"></a>
+  <a href="#results"><img alt="Public PA" src="https://img.shields.io/badge/public%20PA-0.800-2ea44f"></a>
   <a href="https://challenge.zalo.ai"><img alt="Zalo AI Challenge 2026" src="https://img.shields.io/badge/Zalo%20AI%20Challenge-2026%20Track%202-0068FF"></a>
   <img alt="Python 3.12" src="https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white">
   <img alt="vLLM 0.32.0" src="https://img.shields.io/badge/vLLM-0.32.0-30A2FF">
@@ -31,11 +31,13 @@ inference, training, evaluation, notebooks and the offline Docker image.
 
 ## Highlights
 
-- **0.683 on the public test**, from 0.25 for the first pandas agent, trained only on the organizer's train split.
-- **One model, within the limits.** Qwen3.5-9B with one LoRA adapter of our own (9.70B parameters, limit 15B), offline, one
-  process per GPU over its share of the shops, each stopping itself at 5 h 50 min to stay within the 6-hour limit.
-- **The model writes SQL, DuckDB computes.** Every question gets 8 SQL samples run read-only on normalised data. An answer is
-  given only when enough samples agree; otherwise the question is abstained to avoid the penalty.
+- **0.800 on the public test**, from 0.25 for the first pandas agent, trained only on the organizer's train split and on
+  synthetic shops from our own generator.
+- **One base model, two adapters, within the limits.** Qwen3.5-9B with two LoRA adapters of our own (9.74B parameters, limit
+  15B), offline, one process per GPU over its share of the shops, everything stopping at 5 h 50 min to stay within 6 hours.
+- **The model writes SQL, DuckDB computes.** Every question gets 8 SQL samples run read-only on normalised data, once with each
+  adapter. An answer is given only when enough samples of both passes agree; otherwise the question is abstained to avoid the
+  penalty.
 - **Reproducible.** Notebooks from EDA to LoRA training (run locally and on Kaggle); the Docker image carries the code, the
   training data, logs, checkpoints and a SHA-256 manifest, as the organizer's guide asks.
 
@@ -87,6 +89,10 @@ rulebook.md   ───┘      │
 `datamate/pipeline.py` chains the steps. Each step is its own method, so the prompts and the vote of a saved run can be rebuilt
 without a GPU (`analysis/replay_run.py`).
 
+The submitted setup runs this pipeline twice on the same shop layers: pass 1 with LoRA v3 drafts the layers and answers every
+question, pass 2 answers again with LoRA v5, and `analysis/pool_runs.py` lets every sample of both passes vote once. Where the
+two adapters disagree, the question is abstained.
+
 ## Results
 
 | Version   | Main change                                                                                        | Public    |
@@ -97,10 +103,15 @@ without a GPU (`analysis/replay_run.py`).
 | v6        | notes before the SQL, debt-macro examples                                                          | 0.63      |
 | sql-hints | v6 + hints by question shape, with a synonym list taken from public dish names (dropped in v9)     | 0.696     |
 | v8        | LoRA v3 (adds replies from a 27B teacher model, on train only), data checks on the views          | 0.639     |
-| **v9**    | v8 + `sql-hints`, vote keys that follow the scorer, debt-layer fixes                               | **0.683** |
+| v9        | v8 + `sql-hints`, vote keys that follow the scorer, debt-layer fixes                               | 0.683     |
+| v10       | data-layer fixes: returns, order codes, monthly unit factors, order-level payments                 | 0.754     |
+| pool      | v10 with LoRA v3 and LoRA v5 (synthetic shops) pooled into one vote                                | 0.773     |
+| **final** | the private-test path: fresh layers for every shop, pass 1 LoRA v3, pass 2 LoRA v5, pooled vote    | **0.800** |
 
-`sql-hints` (0.696) is a team member's branch whose synonym list came from public-test dish names. That list was dropped
-because it is not derived from the train split, so the official submission is v9. Full history: [docs/leaderboard.md](docs/leaderboard.md).
+Up to the `pool` row, public runs reused the layers saved by earlier runs. The final row drafts every layer from scratch,
+exactly as the Docker image does on the private test, so it is the closest estimate of the private score. `sql-hints` (0.696)
+is a team member's branch whose synonym list came from public-test dish names; that list was dropped because it is not derived
+from the train split. Full history: [docs/leaderboard.md](docs/leaderboard.md).
 
 ## Requirements
 
@@ -120,7 +131,7 @@ Data loading, scoring, tests and notebooks 01 and 03 need only a CPU.
 ```bash
 git clone https://github.com/hugebenevolence/zalo-ai-challenge-datamate-26.git
 cd zalo-ai-challenge-datamate-26
-git lfs install && git lfs pull          # adapters/sql_rft_v3
+git lfs install && git lfs pull          # adapters/sql_rft_v3 and adapters/sql_v5
 ```
 
 **2. Create the Python environment:**
@@ -161,7 +172,11 @@ Every run uses the flags of the submitted setup in `scripts/flags.sh`. Each GPU 
 and the shards are merged into one `submission.jsonl`.
 
 ```bash
-# Public test, reusing the views and debt layers saved by the 0.683 run (configs/public_v9). About 3.5 h on one 24 GB GPU.
+# The submitted setup (0.800): fresh layers, pass 1 LoRA v3, pass 2 LoRA v5, pooled vote. The image's entry point run with
+# repository paths. About 7 h on one 24 GB GPU; the file to upload is runs/public_pool/submission.jsonl.
+bash scripts/run_pool.sh data/public_test runs/public_pool
+
+# One pass with LoRA v3, reusing the views and debt layers saved by the 0.683 run (configs/public_v9). About 3.5 h.
 bash scripts/run_public.sh runs/public
 
 # Public test, drafting every view and debt layer from scratch, exactly as the private run in Docker does.
@@ -174,7 +189,7 @@ bash scripts/run_holdout.sh runs/holdout
 .venv/bin/python -m datamate.submission check runs/public/submission.jsonl --questions data/public_test/questions.jsonl
 ```
 
-The file to submit is `runs/public/submission.jsonl`. Logs and per-question traces are in `runs/public/shard<i>/`.
+Logs and per-question traces are in `<out>/shard<i>/` (`<out>/work/` and `<out>/work2/` for the two passes of `run_pool.sh`).
 
 Environment variables:
 
@@ -184,6 +199,7 @@ Environment variables:
 | `GPU_MEM`               | `0.92`                                     | another process shares the GPU (e.g. `0.75`)   |
 | `ENGINE`                | see `scripts/flags.sh`                     | out of memory: lower `max_num_seqs`            |
 | `MODEL_DIR`, `LORA_DIR` | `models/Qwen3.5-9B`, `adapters/sql_rft_v3` | the model or the adapter lives elsewhere       |
+| `TIMEOUT_SECONDS`       | 21,000 in Docker, 86,400 in `run_pool.sh`  | to stop a run earlier                          |
 | `PYTHON`                | `.venv/bin/python`                         | another Python environment                     |
 
 `python -m datamate.predict --help` lists every pipeline flag.
@@ -217,7 +233,7 @@ docker run --rm --gpus '"device=0,1"' --network none --shm-size=16g --entrypoint
 ```
 
 - Layout in the image: `/code/predict.sh` (no arguments), `/code/README.md` (the description for the organizers, source in
-  `docker/README.md`), `/code/src/datamate`, `/code/models/{Qwen3.5-9B,lora}`, `/code/training_code/` (README from
+  `docker/README.md`), `/code/src/datamate`, `/code/models/{Qwen3.5-9B,lora,lora_v5}`, `/code/training_code/` (README from
   `docker/training_code_README.md`).
 - `/data` is one split folder like `data/public_test/` (questions.jsonl, rulebook.md, calendar.csv, data/).
 - Outputs:
@@ -295,6 +311,8 @@ Notes:
   16k drops most of the data.
 - `training/build_fewshot_bank.py` rebuilds `assets/fewshot_bank.jsonl`; `training/merge_lora.py` merges the LoRA into the base
   model.
+- LoRA v5 continues from v3 on the train SFT data plus questions on synthetic shops: `synth/` renders shops into messy files and
+  computes every answer in code. Row counts and sources are in `docker/training_code_README.md`.
 
 ## Notebooks (local, Kaggle and Colab)
 
@@ -355,15 +373,17 @@ datamate/                 inference package (python -m datamate.predict)
   submission.py           writes, merges shards and checks the submission format
   values.py               filter values that are not in the data (for analysis/flags.py)
   notebook.py             shared notebook code: paths, GPU capability, step-by-step runs with logs
-scripts/                  run_public.sh, run_holdout.sh, flags.sh (flags of the submitted setup), pack_training_code.py (training_code for Docker)
+scripts/                  run_pool.sh (the submitted two-pass setup), run_public.sh, run_holdout.sh, flags.sh (flags of the submitted
+                          setup), pack_training_code.py (training_code for Docker)
 docker/                   Dockerfile, predict.sh (entry point /code/predict.sh), README.md (= /code/README.md), train.sh and
                           training_code_README.md (in /code/training_code), requirements.txt, model_manifest.json, build.sh
 training/                 SFT data, notes, few-shot bank, LoRA training, fla kernel check, LoRA merge
-analysis/                 offline evaluation tools (table above)
+analysis/                 offline evaluation tools (table above) and pool_runs.py (the pooled vote of two passes)
+synth/                    synthetic shop generator (training data of LoRA v5)
 notebooks/                00_full_pipeline (all five parts), 01_eda -> 02_inference -> 03_evaluation -> 04_training_data -> 05_train_lora
 configs/public_v9/        views and debt layers of the 0.683 run (only to rerun the public test)
-assets/fewshot_bank.jsonl example bank: train questions and their right SQL
-adapters/sql_rft_v3/      LoRA v3 (Git LFS)
+assets/                   example banks: train questions and their right SQL (fewshot_bank_v2 for pass 2)
+adapters/                 sql_rft_v3 (LoRA v3, pass 1) and sql_v5 (LoRA v5, pass 2), Git LFS
 splits/                   id lists: holdout600, holdout_shops, val300, smoke6, rft_train24
 tests/                    pytest, CPU only
 docs/                     challenge description, data notes, score history, figures
@@ -373,7 +393,7 @@ Not in the repository: `data/` (the organizer's data), `models/` (base weights),
 
 ## Rules we follow
 
-- Offline inference, no human in the loop, at most 15B parameters in total (Qwen3.5-9B, Apache-2.0, + a 43M LoRA).
+- Offline inference, no human in the loop, at most 15B parameters in total (Qwen3.5-9B, Apache-2.0, + two 43M LoRA adapters).
 - No logic keyed on question or shop ids. `configs/public_v9` is used only to rerun the public test; the Docker image for the
   private test always drafts fresh views.
 - No training on test data; any extra annotation was made on train only (§4.2). Prompt hints are rulebook rules or general
@@ -407,6 +427,6 @@ Team: Dương Trường Bình, Tô Phát Đạt, Trần Đại Nhân.
 
 ## License
 
-The code, the LoRA adapter and the example bank in this repository are under the [MIT License](LICENSE). The Qwen3.5-9B model is
+The code, the LoRA adapters and the example banks in this repository are under the [MIT License](LICENSE). The Qwen3.5-9B model is
 downloaded separately and is under Qwen's Apache-2.0 license. The organizer's data is not in this repository and is not covered by
 this license.
